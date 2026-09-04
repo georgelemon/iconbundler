@@ -121,7 +121,7 @@ proc addU32LE(s: var string; v: uint32) =
   s.add char((v shr 16) and 0xff)
   s.add char((v shr 24) and 0xff)
 
-proc writeNetWm(src: Image; dest: string) =
+proc writeNetWm*(src: Image; dest: string) =
   ## `_NET_WM_ICON`: for each size, CARD32 width, height, then width*height
   ## pixels as 0xAARRGGBB. The app copies the blob into CARD32s as it is, so
   ## what is written here is the little-endian order the machines that read it
@@ -269,7 +269,7 @@ proc resolveExec(arg: string): string =
   if result.len == 0:
     quit("cannot find executable: " & arg)
 
-proc prepareFromPng(appId, png: string; src: Image): string =
+proc prepareFromPng*(appId, png: string; src: Image): string =
   ## Everything that is derived from the PNG, written next to it. Returns the
   ## `.ico`, which is the one an installation may still have a use for.
   let dir = png.parentDir
@@ -383,7 +383,7 @@ proc writeInfoPlist(path, name, execName, bundleId, comment: string) =
   s.add "</dict>\n</plist>\n"
   writeFile(path, s)
 
-proc buildIcns(src: Image; icnsPath: string) =
+proc buildIcns*(src: Image; icnsPath: string) =
   let iconset = icnsPath & ".iconset"
   removeDir(iconset)
   createDir(iconset)
@@ -458,84 +458,84 @@ proc installWindows(execPath, ico: string) =
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+when isMainModule:
+  proc usage() =
+    stderr.write """usage: iconbundler <app-id> <exec> [png] [options]
+        iconbundler --prepare <app-id> [png] [options]
 
-proc usage() =
-  stderr.write """usage: iconbundler <app-id> <exec> [png] [options]
-       iconbundler --prepare <app-id> [png] [options]
+    --prepare                 only write .netwm / .ico / .rc / .res next to the PNG
+    --name <Name>
+    --generic-name <text>     (Linux)
+    --comment <text>
+    --categories <Cats>       (Linux)
+    --bundle-id <id>          (macOS, default org.<app-id>)
+    --out <path.app>          (macOS, default ~/Applications/<Name>.app)
+  """
+    quit(1)
 
-  --prepare                 only write .netwm / .ico / .rc / .res next to the PNG
-  --name <Name>
-  --generic-name <text>     (Linux)
-  --comment <text>
-  --categories <Cats>       (Linux)
-  --bundle-id <id>          (macOS, default org.<app-id>)
-  --out <path.app>          (macOS, default ~/Applications/<Name>.app)
-"""
-  quit(1)
+  proc main =
+    var
+      appId, execArg, iconsArg = ""
+      name, genericName, comment = ""
+      categories = "Utility;"
+      bundleId, outArg = ""
+      prepareOnly = false
+      positional: seq[string]
 
-proc main =
-  var
-    appId, execArg, iconsArg = ""
-    name, genericName, comment = ""
-    categories = "Utility;"
-    bundleId, outArg = ""
-    prepareOnly = false
-    positional: seq[string]
+    var i = 1
+    template valueOf(flag: string): string =
+      ## The word after a flag. A flag that ends the command line is a mistake
+      ## worth a sentence; taking the next thing as a file name would not be one.
+      inc i
+      if i > paramCount(): quit("missing value for " & flag)
+      paramStr(i)
 
-  var i = 1
-  template valueOf(flag: string): string =
-    ## The word after a flag. A flag that ends the command line is a mistake
-    ## worth a sentence; taking the next thing as a file name would not be one.
-    inc i
-    if i > paramCount(): quit("missing value for " & flag)
-    paramStr(i)
+    while i <= paramCount():
+      let a = paramStr(i)
+      case a
+      of "--prepare": prepareOnly = true
+      of "--name": name = valueOf(a)
+      of "--generic-name": genericName = valueOf(a)
+      of "--comment": comment = valueOf(a)
+      of "--categories": categories = valueOf(a)
+      of "--bundle-id": bundleId = valueOf(a)
+      of "--out": outArg = valueOf(a)
+      of "-h", "--help": usage()
+      else:
+        if a.startsWith("-"): quit("unknown option: " & a)
+        positional.add a
+      inc i
 
-  while i <= paramCount():
-    let a = paramStr(i)
-    case a
-    of "--prepare": prepareOnly = true
-    of "--name": name = valueOf(a)
-    of "--generic-name": genericName = valueOf(a)
-    of "--comment": comment = valueOf(a)
-    of "--categories": categories = valueOf(a)
-    of "--bundle-id": bundleId = valueOf(a)
-    of "--out": outArg = valueOf(a)
-    of "-h", "--help": usage()
+    if prepareOnly:
+      if positional.len < 1 or positional.len > 2: usage()
+      appId = positional[0]
+      if positional.len == 2: iconsArg = positional[1]
     else:
-      if a.startsWith("-"): quit("unknown option: " & a)
-      positional.add a
-    inc i
+      if positional.len < 2 or positional.len > 3: usage()
+      appId = positional[0]
+      execArg = positional[1]
+      if positional.len == 3: iconsArg = positional[2]
+    if name.len == 0:
+      name = appId
+    if bundleId.len == 0:
+      bundleId = "org." & appId
 
-  if prepareOnly:
-    if positional.len < 1 or positional.len > 2: usage()
-    appId = positional[0]
-    if positional.len == 2: iconsArg = positional[1]
-  else:
-    if positional.len < 2 or positional.len > 3: usage()
-    appId = positional[0]
-    execArg = positional[1]
-    if positional.len == 3: iconsArg = positional[2]
-  if name.len == 0:
-    name = appId
-  if bundleId.len == 0:
-    bundleId = "org." & appId
+    detectTools()
+    let png = sourcePng(appId, iconsArg)
+    let src = loadSource(png)
+    let ico = prepareFromPng(appId, png, src)
+    if not prepareOnly:
+      let execPath = resolveExec(execArg)
+      case hostOS
+      of "linux":
+        installLinux(appId, execPath, name, genericName, comment, categories,
+                    src)
+      of "macosx":
+        installMacos(appId, execPath, name, comment, bundleId, outArg, src)
+      of "windows":
+        installWindows(execPath, ico)
+      else:
+        quit("unsupported host OS: " & hostOS)
+    echo "done."
 
-  detectTools()
-  let png = sourcePng(appId, iconsArg)
-  let src = loadSource(png)
-  let ico = prepareFromPng(appId, png, src)
-  if not prepareOnly:
-    let execPath = resolveExec(execArg)
-    case hostOS
-    of "linux":
-      installLinux(appId, execPath, name, genericName, comment, categories,
-                   src)
-    of "macosx":
-      installMacos(appId, execPath, name, comment, bundleId, outArg, src)
-    of "windows":
-      installWindows(execPath, ico)
-    else:
-      quit("unsupported host OS: " & hostOS)
-  echo "done."
-
-main()
+  main()
